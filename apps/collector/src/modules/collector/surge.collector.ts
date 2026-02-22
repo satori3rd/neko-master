@@ -172,6 +172,7 @@ interface TrackedRequest {
   completed: boolean;
   disconnected: boolean;
   lastStatus?: string;
+  counted: boolean;
   // Track if initial values have been processed
   initialProcessed: boolean;
 }
@@ -248,9 +249,6 @@ export function createSurgeCollector(
   const id = backendId || 0;
   const activeRequests = new Map<string, TrackedRequest>();
   const batchBuffer = new BatchBuffer();
-  // Track which request IDs have been counted in the realtime store for the current
-  // flush interval — same deduplication as gateway direct mode's countedConnectionIds.
-  const countedConnectionIds = new Set<string>();
 
   // Track recently completed requests to prevent double counting
   // Key: request ID, Value: completion timestamp
@@ -330,13 +328,10 @@ export function createSurgeCollector(
       if (stats.hasTrafficUpdates && stats.trafficOk) {
         if (trafficDetailOk && trafficAggOk) {
           realtimeStore.clearTraffic(id);
-          countedConnectionIds.clear();
         } else if (trafficDetailOk && !trafficAggOk) {
           realtimeStore.clearTrafficDimensions(id);
-          countedConnectionIds.clear();
         } else if (!trafficDetailOk && trafficAggOk) {
           realtimeStore.clearTrafficSummary(id);
-          countedConnectionIds.clear();
         }
       }
 
@@ -507,6 +502,7 @@ export function createSurgeCollector(
           // IMPORTANT: We now record initial traffic immediately to prevent data loss
           // for short-lived connections that disappear before the next poll.
           // The recentlyCompleted map prevents double counting if the same request reappears.
+          const hasInitialTraffic = currentUpload > 0 || currentDownload > 0;
           activeRequests.set(req.id, {
             id: req.id,
             domain,
@@ -524,6 +520,7 @@ export function createSurgeCollector(
             completed: isCompleted,
             disconnected: isDisconnected,
             lastStatus: req.status,
+            counted: hasInitialTraffic,
             initialProcessed: true,  // Mark as processed
           });
 
@@ -534,7 +531,8 @@ export function createSurgeCollector(
           }
 
           // Record initial traffic if non-zero
-          if (currentUpload > 0 || currentDownload > 0) {
+          if (hasInitialTraffic) {
+            const connections = 1;
             batchBuffer.add(id, {
               domain,
               ip,
@@ -544,11 +542,10 @@ export function createSurgeCollector(
               rulePayload: rulePayload || "",
               upload: currentUpload,
               download: currentDownload,
+              connections,
               sourceIP,
               timestampMs: req.time || now,
             });
-            const isNewThisFlush = !countedConnectionIds.has(req.id);
-            countedConnectionIds.add(req.id);
             realtimeStore.recordTraffic(
               id,
               {
@@ -561,7 +558,7 @@ export function createSurgeCollector(
                 upload: currentUpload,
                 download: currentDownload,
               },
-              isNewThisFlush ? 1 : 0,
+              connections,
               now
             );
 
@@ -574,7 +571,7 @@ export function createSurgeCollector(
               };
               existingGeo.upload += currentUpload;
               existingGeo.download += currentDownload;
-              if (isNewThisFlush) existingGeo.connections += 1;
+              existingGeo.connections += connections;
               geoBatchByIp.set(ip, existingGeo);
             }
 
@@ -590,6 +587,7 @@ export function createSurgeCollector(
             // Counter was reset - treat current value as new traffic
             uploadDelta = currentUpload;
             downloadDelta = currentDownload;
+            existing.counted = false;
             if (DEBUG_SURGE) {
               console.log(`[SurgeCollector:${id}] Counter reset detected: ${req.id}`);
             }
@@ -620,6 +618,10 @@ export function createSurgeCollector(
 
           // Only record if there's actual new traffic
           if (uploadDelta > 0 || downloadDelta > 0) {
+            const connections = existing.counted ? 0 : 1;
+            if (connections > 0) {
+              existing.counted = true;
+            }
             existing.totalUpload += uploadDelta;
             existing.totalDownload += downloadDelta;
 
@@ -632,11 +634,10 @@ export function createSurgeCollector(
               rulePayload: existing.rulePayload || "",
               upload: uploadDelta,
               download: downloadDelta,
+              connections,
               sourceIP: existing.sourceIP,
               timestampMs: req.time || now,
             });
-            const isNewThisFlush = !countedConnectionIds.has(req.id);
-            countedConnectionIds.add(req.id);
             realtimeStore.recordTraffic(
               id,
               {
@@ -649,7 +650,7 @@ export function createSurgeCollector(
                 upload: uploadDelta,
                 download: downloadDelta,
               },
-              isNewThisFlush ? 1 : 0,
+              connections,
               now
             );
 
@@ -661,7 +662,7 @@ export function createSurgeCollector(
               };
               existingGeo.upload += uploadDelta;
               existingGeo.download += downloadDelta;
-              if (isNewThisFlush) existingGeo.connections += 1;
+              existingGeo.connections += connections;
               geoBatchByIp.set(existing.ip, existingGeo);
             }
 
@@ -802,7 +803,6 @@ export function createSurgeCollector(
     // Keep active request baselines to avoid replaying historical cumulative
     // counters after a DB/log wipe. Only clear pending in-memory deltas.
     batchBuffer.clear();
-    countedConnectionIds.clear();
   };
 
   return collectorWithReset;

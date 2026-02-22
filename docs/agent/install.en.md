@@ -46,7 +46,8 @@ After install, manage agent with:
 nekoagent status <instance>
 nekoagent logs <instance>
 nekoagent restart <instance>
-nekoagent update <instance> agent-vX.Y.Z
+nekoagent upgrade
+nekoagent upgrade agent-vX.Y.Z
 nekoagent remove <instance>
 ```
 
@@ -85,7 +86,7 @@ Common mapping:
 The install script places two binaries into `NEKO_INSTALL_DIR` (default `~/.local/bin`):
 
 - `neko-agent` — the data collection daemon (runs continuously, reports to panel)
-- `nekoagent` — the CLI manager for lifecycle operations (start / stop / update / remove)
+- `nekoagent` — the CLI manager for lifecycle operations (start / stop / upgrade / remove)
 
 The `nekoagent` manager stores:
 

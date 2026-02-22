@@ -57,7 +57,7 @@ nekoagent status <instance>           # 查看运行状态
 nekoagent logs <instance>             # 实时查看日志
 nekoagent restart <instance>          # 重启进程
 nekoagent stop <instance>             # 优雅停止（最多等待约 12 秒完成最终 flush）
-nekoagent update <instance>           # 更新到最新版本
+nekoagent upgrade                     # 全局升级（CLI + 二进制）
 nekoagent remove <instance>           # 停止并删除配置
 ```
 

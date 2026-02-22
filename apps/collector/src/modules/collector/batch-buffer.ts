@@ -21,6 +21,7 @@ export interface TrafficUpdate {
   rulePayload: string;
   upload: number;
   download: number;
+  connections?: number;
   sourceIP?: string;
   timestampMs?: number;
 }
@@ -36,6 +37,12 @@ export interface GeoIPResult {
   download: number;
   connections?: number;
   timestampMs?: number;
+}
+
+function normalizeConnections(value: number | undefined): number {
+  const safe =
+    typeof value === "number" && Number.isFinite(value) ? value : 1;
+  return Math.max(0, Math.floor(safe));
 }
 
 export function toMinuteKey(timestampMs?: number): string {
@@ -78,15 +85,18 @@ export class BatchBuffer {
       update.sourceIP || "",
     ].join(":");
     const existing = this.buffer.get(key);
+    const connections = normalizeConnections(update.connections);
 
     if (existing) {
       existing.upload += update.upload;
       existing.download += update.download;
+      existing.connections =
+        normalizeConnections(existing.connections) + connections;
       if ((update.timestampMs ?? 0) > (existing.timestampMs ?? 0)) {
         existing.timestampMs = update.timestampMs;
       }
     } else {
-      this.buffer.set(key, { ...update });
+      this.buffer.set(key, { ...update, connections });
     }
   }
 

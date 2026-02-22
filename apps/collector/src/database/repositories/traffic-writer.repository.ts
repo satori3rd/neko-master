@@ -16,6 +16,7 @@ export interface TrafficUpdate {
   rulePayload: string;
   upload: number;
   download: number;
+  connections?: number;
   sourceIP?: string;
   timestampMs?: number;
 }
@@ -26,6 +27,12 @@ export class TrafficWriterRepository extends BaseRepository {
 
   constructor(db: Database.Database) {
     super(db);
+  }
+
+  private normalizeConnections(value: number | undefined): number {
+    const safe =
+      typeof value === 'number' && Number.isFinite(value) ? value : 1;
+    return Math.max(0, Math.floor(safe));
   }
 
   private prepareSingleStmts() {
@@ -229,6 +236,7 @@ export class TrafficWriterRepository extends BaseRepository {
 
     for (const update of updates) {
       if (update.upload === 0 && update.download === 0) continue;
+      const connections = this.normalizeConnections(update.connections);
 
       const ruleName = update.chains.length > 1 ? update.chains[update.chains.length - 1] :
                        update.rulePayload ? `${update.rule}(${update.rulePayload})` : update.rule;
@@ -240,109 +248,273 @@ export class TrafficWriterRepository extends BaseRepository {
       if (update.domain) {
         const domainKey = `${update.domain}:${update.ip}:${fullChain}`;
         const existing = domainMap.get(domainKey);
-        if (existing) { existing.upload += update.upload; existing.download += update.download; existing.count++; }
-        else { domainMap.set(domainKey, { ...update, count: 1 }); }
+        if (existing) {
+          existing.upload += update.upload;
+          existing.download += update.download;
+          existing.count += connections;
+        } else {
+          domainMap.set(domainKey, { ...update, count: connections });
+        }
       }
 
       // Aggregate IP stats
       const ipKey = `${update.ip}:${update.domain}:${fullChain}`;
       const existingIp = ipMap.get(ipKey);
-      if (existingIp) { existingIp.upload += update.upload; existingIp.download += update.download; existingIp.count++; }
-      else { ipMap.set(ipKey, { ...update, rule: ruleName, count: 1 }); }
+      if (existingIp) {
+        existingIp.upload += update.upload;
+        existingIp.download += update.download;
+        existingIp.count += connections;
+      } else {
+        ipMap.set(ipKey, { ...update, rule: ruleName, count: connections });
+      }
 
       // Aggregate chain stats
       const existingChain = chainMap.get(fullChain);
-      if (existingChain) { existingChain.upload += update.upload; existingChain.download += update.download; existingChain.count++; }
-      else { chainMap.set(fullChain, { chains: update.chains, upload: update.upload, download: update.download, count: 1 }); }
+      if (existingChain) {
+        existingChain.upload += update.upload;
+        existingChain.download += update.download;
+        existingChain.count += connections;
+      } else {
+        chainMap.set(fullChain, {
+          chains: update.chains,
+          upload: update.upload,
+          download: update.download,
+          count: connections,
+        });
+      }
 
       // Aggregate rule stats
       const ruleKey = `${ruleName}:${finalProxy}`;
       const existingRule = ruleProxyMap.get(ruleKey);
-      if (existingRule) { existingRule.upload += update.upload; existingRule.download += update.download; existingRule.count++; }
-      else { ruleProxyMap.set(ruleKey, { rule: ruleName, proxy: finalProxy, upload: update.upload, download: update.download, count: 1 }); }
+      if (existingRule) {
+        existingRule.upload += update.upload;
+        existingRule.download += update.download;
+        existingRule.count += connections;
+      } else {
+        ruleProxyMap.set(ruleKey, {
+          rule: ruleName,
+          proxy: finalProxy,
+          upload: update.upload,
+          download: update.download,
+          count: connections,
+        });
+      }
 
       // Aggregate hourly stats
       const existingHour = hourlyMap.get(hourKey);
-      if (existingHour) { existingHour.upload += update.upload; existingHour.download += update.download; existingHour.connections++; }
-      else { hourlyMap.set(hourKey, { upload: update.upload, download: update.download, connections: 1 }); }
+      if (existingHour) {
+        existingHour.upload += update.upload;
+        existingHour.download += update.download;
+        existingHour.connections += connections;
+      } else {
+        hourlyMap.set(hourKey, {
+          upload: update.upload,
+          download: update.download,
+          connections,
+        });
+      }
 
       // Aggregate rule_chain_traffic
       const fullChainForRule = update.chains.join(' > ');
       const ruleChainKey = `${ruleName}:${fullChainForRule}`;
       const existingRuleChain = ruleChainMap.get(ruleChainKey);
-      if (existingRuleChain) { existingRuleChain.upload += update.upload; existingRuleChain.download += update.download; existingRuleChain.count++; }
-      else { ruleChainMap.set(ruleChainKey, { rule: ruleName, chain: fullChainForRule, upload: update.upload, download: update.download, count: 1 }); }
+      if (existingRuleChain) {
+        existingRuleChain.upload += update.upload;
+        existingRuleChain.download += update.download;
+        existingRuleChain.count += connections;
+      } else {
+        ruleChainMap.set(ruleChainKey, {
+          rule: ruleName,
+          chain: fullChainForRule,
+          upload: update.upload,
+          download: update.download,
+          count: connections,
+        });
+      }
 
       // Aggregate rule_domain_traffic
       if (update.domain) {
         const rdKey = `${ruleName}:${update.domain}`;
         const existingRD = ruleDomainMap.get(rdKey);
-        if (existingRD) { existingRD.upload += update.upload; existingRD.download += update.download; existingRD.count++; }
-        else { ruleDomainMap.set(rdKey, { rule: ruleName, domain: update.domain, upload: update.upload, download: update.download, count: 1 }); }
+        if (existingRD) {
+          existingRD.upload += update.upload;
+          existingRD.download += update.download;
+          existingRD.count += connections;
+        } else {
+          ruleDomainMap.set(rdKey, {
+            rule: ruleName,
+            domain: update.domain,
+            upload: update.upload,
+            download: update.download,
+            count: connections,
+          });
+        }
       }
 
       // Aggregate rule_ip_traffic
       const riKey = `${ruleName}:${update.ip}`;
       const existingRI = ruleIPMap.get(riKey);
-      if (existingRI) { existingRI.upload += update.upload; existingRI.download += update.download; existingRI.count++; }
-      else { ruleIPMap.set(riKey, { rule: ruleName, ip: update.ip, upload: update.upload, download: update.download, count: 1 }); }
+      if (existingRI) {
+        existingRI.upload += update.upload;
+        existingRI.download += update.download;
+        existingRI.count += connections;
+      } else {
+        ruleIPMap.set(riKey, {
+          rule: ruleName,
+          ip: update.ip,
+          upload: update.upload,
+          download: update.download,
+          count: connections,
+        });
+      }
 
       // Aggregate minute_stats
       const existingMinute = minuteMap.get(minuteKey);
-      if (existingMinute) { existingMinute.upload += update.upload; existingMinute.download += update.download; existingMinute.connections++; }
-      else { minuteMap.set(minuteKey, { upload: update.upload, download: update.download, connections: 1 }); }
+      if (existingMinute) {
+        existingMinute.upload += update.upload;
+        existingMinute.download += update.download;
+        existingMinute.connections += connections;
+      } else {
+        minuteMap.set(minuteKey, {
+          upload: update.upload,
+          download: update.download,
+          connections,
+        });
+      }
 
       // Aggregate minute_dim_stats
       const dimKey = `${minuteKey}:${update.domain || ''}:${update.ip || ''}:${update.sourceIP || ''}:${fullChain}:${ruleName}`;
       const existingDim = minuteDimMap.get(dimKey);
-      if (existingDim) { existingDim.upload += update.upload; existingDim.download += update.download; existingDim.connections++; }
-      else { minuteDimMap.set(dimKey, { minute: minuteKey, domain: update.domain || '', ip: update.ip || '', sourceIP: update.sourceIP || '', chain: fullChain, rule: ruleName, upload: update.upload, download: update.download, connections: 1 }); }
+      if (existingDim) {
+        existingDim.upload += update.upload;
+        existingDim.download += update.download;
+        existingDim.connections += connections;
+      } else {
+        minuteDimMap.set(dimKey, {
+          minute: minuteKey,
+          domain: update.domain || '',
+          ip: update.ip || '',
+          sourceIP: update.sourceIP || '',
+          chain: fullChain,
+          rule: ruleName,
+          upload: update.upload,
+          download: update.download,
+          connections,
+        });
+      }
 
       // Aggregate hourly_dim_stats
       const hourlyDimKey = `${hourKey}:${update.domain || ''}:${update.ip || ''}:${update.sourceIP || ''}:${fullChain}:${ruleName}`;
       const existingHourlyDim = hourlyDimMap.get(hourlyDimKey);
-      if (existingHourlyDim) { existingHourlyDim.upload += update.upload; existingHourlyDim.download += update.download; existingHourlyDim.connections++; }
-      else { hourlyDimMap.set(hourlyDimKey, { hour: hourKey, domain: update.domain || '', ip: update.ip || '', sourceIP: update.sourceIP || '', chain: fullChain, rule: ruleName, upload: update.upload, download: update.download, connections: 1 }); }
+      if (existingHourlyDim) {
+        existingHourlyDim.upload += update.upload;
+        existingHourlyDim.download += update.download;
+        existingHourlyDim.connections += connections;
+      } else {
+        hourlyDimMap.set(hourlyDimKey, {
+          hour: hourKey,
+          domain: update.domain || '',
+          ip: update.ip || '',
+          sourceIP: update.sourceIP || '',
+          chain: fullChain,
+          rule: ruleName,
+          upload: update.upload,
+          download: update.download,
+          connections,
+        });
+      }
 
       // Aggregate domain_proxy_stats
       if (update.domain) {
         const dpKey = `${update.domain}:${fullChain}`;
         const existingDP = domainProxyMap.get(dpKey);
-        if (existingDP) { existingDP.upload += update.upload; existingDP.download += update.download; existingDP.count++; }
-        else { domainProxyMap.set(dpKey, { domain: update.domain, chain: fullChain, upload: update.upload, download: update.download, count: 1 }); }
+        if (existingDP) {
+          existingDP.upload += update.upload;
+          existingDP.download += update.download;
+          existingDP.count += connections;
+        } else {
+          domainProxyMap.set(dpKey, {
+            domain: update.domain,
+            chain: fullChain,
+            upload: update.upload,
+            download: update.download,
+            count: connections,
+          });
+        }
       }
 
       // Aggregate ip_proxy_stats
       const ipPKey = `${update.ip}:${fullChain}`;
       const existingIPP = ipProxyMap.get(ipPKey);
       if (existingIPP) {
-        existingIPP.upload += update.upload; existingIPP.download += update.download; existingIPP.count++;
+        existingIPP.upload += update.upload;
+        existingIPP.download += update.download;
+        existingIPP.count += connections;
         if (update.domain && update.domain !== 'unknown') existingIPP.domains.add(update.domain);
       } else {
         const domains = new Set<string>();
         if (update.domain && update.domain !== 'unknown') domains.add(update.domain);
-        ipProxyMap.set(ipPKey, { ip: update.ip, chain: fullChain, upload: update.upload, download: update.download, count: 1, domains });
+        ipProxyMap.set(ipPKey, {
+          ip: update.ip,
+          chain: fullChain,
+          upload: update.upload,
+          download: update.download,
+          count: connections,
+          domains,
+        });
       }
 
       // Aggregate device stats
       if (update.sourceIP) {
         const sourceIP = update.sourceIP;
         const existingDevice = deviceMap.get(sourceIP);
-        if (existingDevice) { existingDevice.upload += update.upload; existingDevice.download += update.download; existingDevice.count++; }
-        else { deviceMap.set(sourceIP, { sourceIP, upload: update.upload, download: update.download, count: 1 }); }
+        if (existingDevice) {
+          existingDevice.upload += update.upload;
+          existingDevice.download += update.download;
+          existingDevice.count += connections;
+        } else {
+          deviceMap.set(sourceIP, {
+            sourceIP,
+            upload: update.upload,
+            download: update.download,
+            count: connections,
+          });
+        }
 
         if (update.domain) {
           const ddKey = `${sourceIP}:${update.domain}`;
           const existingDD = deviceDomainMap.get(ddKey);
-          if (existingDD) { existingDD.upload += update.upload; existingDD.download += update.download; existingDD.count++; }
-          else { deviceDomainMap.set(ddKey, { sourceIP, domain: update.domain, upload: update.upload, download: update.download, count: 1 }); }
+          if (existingDD) {
+            existingDD.upload += update.upload;
+            existingDD.download += update.download;
+            existingDD.count += connections;
+          } else {
+            deviceDomainMap.set(ddKey, {
+              sourceIP,
+              domain: update.domain,
+              upload: update.upload,
+              download: update.download,
+              count: connections,
+            });
+          }
         }
 
         if (update.ip) {
           const diKey = `${sourceIP}:${update.ip}`;
           const existingDI = deviceIPMap.get(diKey);
-          if (existingDI) { existingDI.upload += update.upload; existingDI.download += update.download; existingDI.count++; }
-          else { deviceIPMap.set(diKey, { sourceIP, ip: update.ip, upload: update.upload, download: update.download, count: 1 }); }
+          if (existingDI) {
+            existingDI.upload += update.upload;
+            existingDI.download += update.download;
+            existingDI.count += connections;
+          } else {
+            deviceIPMap.set(diKey, {
+              sourceIP,
+              ip: update.ip,
+              upload: update.upload,
+              download: update.download,
+              count: connections,
+            });
+          }
         }
       }
     }

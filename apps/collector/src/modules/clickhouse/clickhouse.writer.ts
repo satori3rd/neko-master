@@ -97,7 +97,7 @@ export class ClickHouseWriter {
             : item.rule,
       upload: Math.max(0, Math.floor(item.upload)),
       download: Math.max(0, Math.floor(item.download)),
-      connections: 1,
+      connections: Math.max(0, Math.floor(item.connections ?? 1)),
     }));
 
     // Pre-aggregate by (backend_id, minute) for the lightweight agg table

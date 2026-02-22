@@ -40,6 +40,9 @@ func TestIngestSnapshotsDeltaCalculation(t *testing.T) {
 	if first[0].Upload != 10 || first[0].Download != 20 {
 		t.Fatalf("expected first delta 10/20, got %d/%d", first[0].Upload, first[0].Download)
 	}
+	if first[0].Connections != 1 {
+		t.Fatalf("expected first connections 1, got %d", first[0].Connections)
+	}
 
 	runner.ingestSnapshots([]domain.FlowSnapshot{{
 		ID:       "flow-1",
@@ -56,6 +59,9 @@ func TestIngestSnapshotsDeltaCalculation(t *testing.T) {
 	if second[0].Upload != 15 || second[0].Download != 30 {
 		t.Fatalf("expected second delta 15/30, got %d/%d", second[0].Upload, second[0].Download)
 	}
+	if second[0].Connections != 0 {
+		t.Fatalf("expected second connections 0, got %d", second[0].Connections)
+	}
 
 	runner.ingestSnapshots([]domain.FlowSnapshot{{
 		ID:       "flow-1",
@@ -68,5 +74,54 @@ func TestIngestSnapshotsDeltaCalculation(t *testing.T) {
 	third := runner.takeBatch(10)
 	if len(third) != 0 {
 		t.Fatalf("expected third batch len 0 when counters reset, got %d", len(third))
+	}
+}
+
+func TestIngestSnapshotsFirstTrafficAfterZeroCarriesConnection(t *testing.T) {
+	runner := NewRunner(config.Config{
+		ServerAPIBase:       "http://localhost:3000/api",
+		BackendID:           1,
+		BackendToken:        "token",
+		AgentID:             "agent-test",
+		GatewayType:         "clash",
+		GatewayEndpoint:     "http://127.0.0.1:9090",
+		ReportInterval:      time.Second,
+		HeartbeatInterval:   time.Second,
+		GatewayPollInterval: time.Second,
+		RequestTimeout:      time.Second,
+		ReportBatchSize:     100,
+		MaxPendingUpdates:   1000,
+		StaleFlowTimeout:    time.Minute,
+	})
+
+	runner.ingestSnapshots([]domain.FlowSnapshot{{
+		ID:       "flow-2",
+		Upload:   0,
+		Download: 0,
+		Chains:   []string{"DIRECT"},
+		Rule:     "Match",
+	}}, 1000)
+
+	if batch := runner.takeBatch(10); len(batch) != 0 {
+		t.Fatalf("expected no batch for zero traffic, got %d", len(batch))
+	}
+
+	runner.ingestSnapshots([]domain.FlowSnapshot{{
+		ID:       "flow-2",
+		Upload:   8,
+		Download: 5,
+		Chains:   []string{"DIRECT"},
+		Rule:     "Match",
+	}}, 2000)
+
+	second := runner.takeBatch(10)
+	if len(second) != 1 {
+		t.Fatalf("expected one update after first traffic, got %d", len(second))
+	}
+	if second[0].Upload != 8 || second[0].Download != 5 {
+		t.Fatalf("expected delta 8/5, got %d/%d", second[0].Upload, second[0].Download)
+	}
+	if second[0].Connections != 1 {
+		t.Fatalf("expected connections 1 for first non-zero traffic, got %d", second[0].Connections)
 	}
 }

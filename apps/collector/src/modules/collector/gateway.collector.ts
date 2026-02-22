@@ -129,6 +129,7 @@ interface TrackedConnection {
   lastDownload: number;
   totalUpload: number;
   totalDownload: number;
+  counted: boolean;
   sourceIP?: string;
   lastSeen: number;
 }
@@ -144,10 +145,6 @@ export function createCollector(
   const id = backendId || 0;
   const activeConnections = new Map<string, TrackedConnection>();
   const batchBuffer = new BatchBuffer();
-  // Track which connection IDs have been counted in the realtime store for the
-  // current flush interval. Each connection contributes connections=1 exactly once
-  // per flush interval, matching the BatchBuffer's per-minute deduplication semantics.
-  const countedConnectionIds = new Set<string>();
   let lastBroadcastTime = 0;
   const broadcastThrottleMs = 500;
   let flushInterval: NodeJS.Timeout | null = null;
@@ -209,15 +206,12 @@ export function createCollector(
       if (stats.hasTrafficUpdates && stats.trafficOk) {
         if (trafficDetailOk && trafficAggOk) {
           realtimeStore.clearTraffic(id);
-          countedConnectionIds.clear();
         } else if (trafficDetailOk && !trafficAggOk) {
           // Detail committed, agg failed: clear detail-side realtime only.
           realtimeStore.clearTrafficDimensions(id);
-          countedConnectionIds.clear();
         } else if (!trafficDetailOk && trafficAggOk) {
           // Agg committed, detail failed: clear summary-side realtime only.
           realtimeStore.clearTrafficSummary(id);
-          countedConnectionIds.clear();
         }
       }
 
@@ -323,6 +317,7 @@ export function createCollector(
 
         if (!existing) {
           // New connection - track it and record initial traffic
+          const hasInitialTraffic = conn.upload > 0 || conn.download > 0;
           activeConnections.set(conn.id, {
             id: conn.id,
             domain,
@@ -334,12 +329,14 @@ export function createCollector(
             lastDownload: conn.download,
             totalUpload: conn.upload,
             totalDownload: conn.download,
+            counted: hasInitialTraffic,
             sourceIP,
             lastSeen: now,
           });
 
           // Record initial traffic for new connection (add to batch buffer)
-          if (conn.upload > 0 || conn.download > 0) {
+          if (hasInitialTraffic) {
+            const connections = 1;
             batchBuffer.add(id, {
               domain,
               ip,
@@ -349,11 +346,10 @@ export function createCollector(
               rulePayload,
               upload: conn.upload,
               download: conn.download,
+              connections,
               sourceIP,
               timestampMs: now,
             });
-            const isNewThisFlush = !countedConnectionIds.has(conn.id);
-            countedConnectionIds.add(conn.id);
             realtimeStore.recordTraffic(
               id,
               {
@@ -366,7 +362,7 @@ export function createCollector(
                 upload: conn.upload,
                 download: conn.download,
               },
-              isNewThisFlush ? 1 : 0,
+              connections,
               now
             );
 
@@ -379,7 +375,7 @@ export function createCollector(
               };
               existingGeo.upload += conn.upload;
               existingGeo.download += conn.download;
-              if (isNewThisFlush) existingGeo.connections += 1;
+              existingGeo.connections += connections;
               geoBatchByIp.set(ip, existingGeo);
             }
 
@@ -394,6 +390,10 @@ export function createCollector(
           );
 
           if (uploadDelta > 0 || downloadDelta > 0) {
+            const connections = existing.counted ? 0 : 1;
+            if (connections > 0) {
+              existing.counted = true;
+            }
             // Update accumulated traffic for this connection
             existing.totalUpload += uploadDelta;
             existing.totalDownload += downloadDelta;
@@ -408,11 +408,10 @@ export function createCollector(
               rulePayload: existing.rulePayload || "",
               upload: uploadDelta,
               download: downloadDelta,
+              connections,
               sourceIP: existing.sourceIP,
               timestampMs: now,
             });
-            const isNewThisFlush = !countedConnectionIds.has(conn.id);
-            countedConnectionIds.add(conn.id);
             realtimeStore.recordTraffic(
               id,
               {
@@ -425,7 +424,7 @@ export function createCollector(
                 upload: uploadDelta,
                 download: downloadDelta,
               },
-              isNewThisFlush ? 1 : 0,
+              connections,
               now
             );
 
@@ -438,7 +437,7 @@ export function createCollector(
               };
               existingGeo.upload += uploadDelta;
               existingGeo.download += downloadDelta;
-              if (isNewThisFlush) existingGeo.connections += 1;
+              existingGeo.connections += connections;
               geoBatchByIp.set(existing.ip, existingGeo);
             }
 
@@ -536,7 +535,6 @@ export function createCollector(
     // Keep active connection baselines to avoid replaying historical cumulative
     // counters after a DB/log wipe. Only clear pending in-memory deltas.
     batchBuffer.clear();
-    countedConnectionIds.clear();
   };
 
   return collectorWithReset;

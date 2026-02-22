@@ -57,6 +57,7 @@ type AgentTrafficUpdatePayload = {
   rulePayload?: string;
   upload?: number;
   download?: number;
+  connections?: number;
   sourceIP?: string;
   timestampMs?: number;
 };
@@ -125,13 +126,11 @@ export async function createApp(options: AppOptions) {
   // Keyed by requestId, value is the time it was first seen (ms). TTL: 5 minutes.
   const seenRequestIds = new Map<string, number>();
 
-  // Per-backend BatchBuffer for agent mode — mirrors direct mode's 30s batch window so that
-  // "connections" is counted as one event per (connection-key, minute) rather than one per
-  // 2-second agent report, keeping statistics semantically consistent with direct mode.
+  // Per-backend BatchBuffer for agent mode — mirrors direct mode's 30s batch window and
+  // applies the same deferred flush behavior for sqlite/clickhouse writes.
   const agentBatchBuffers = new Map<number, BatchBuffer>();
-  // Per-backend set of connection keys seen in the realtime store for the current flush
-  // interval. Ensures each connection contributes connections=1 exactly once per flush
-  // interval, consistent with direct mode's countedConnectionIds deduplication.
+  // Per-backend legacy fallback dedup set. Only used when an older agent payload
+  // does not provide explicit `connections`.
   const agentCountedByBackend = new Map<number, Set<string>>();
   // Per-backend flush lock — mirrors direct mode's isFlushing to prevent a slow CH write
   // from letting the next timer tick start a second flush before clearTraffic completes.
@@ -464,6 +463,9 @@ export async function createApp(options: AppOptions) {
     const timestampMs = Number.isFinite(raw.timestampMs)
       ? Math.max(0, Math.floor(raw.timestampMs || 0))
       : Date.now();
+    const connections = Number.isFinite(raw.connections)
+      ? Math.max(0, Math.floor(raw.connections || 0))
+      : undefined;
 
     return {
       domain: String(raw.domain || '').trim().slice(0, 253),
@@ -474,6 +476,7 @@ export async function createApp(options: AppOptions) {
       rulePayload: String(raw.rulePayload || '').trim().slice(0, 512),
       upload,
       download,
+      connections,
       sourceIP: String(raw.sourceIP || '').trim().slice(0, 64),
       timestampMs,
     };
@@ -654,9 +657,9 @@ export async function createApp(options: AppOptions) {
       }
     >();
 
-    // Get or create per-backend counted-connections set for the current flush interval.
-    // Mirrors countedConnectionIds in direct mode: each unique connection key contributes
-    // connections=1 exactly once per flush interval regardless of agent report frequency.
+    // Compatibility fallback for older agents that do not send explicit `connections`.
+    // For those payloads only, we deduplicate by a composite key within the current
+    // flush window to avoid counting every 2s report as a new connection.
     let agentCounted = agentCountedByBackend.get(backendId);
     if (!agentCounted) {
       agentCounted = new Set<string>();
@@ -664,24 +667,29 @@ export async function createApp(options: AppOptions) {
     }
 
     for (const update of updates) {
-      // Connection key matches BatchBuffer's deduplication dimensions (minus minuteKey):
-      // domain, ip, full chain, rule, rulePayload, sourceIP.
-      const connectionKey = `${update.domain}:${update.ip}:${update.chains.join(' > ')}:${update.rule}:${update.rulePayload}:${update.sourceIP || ''}`;
-      const isNewThisFlush = !agentCounted.has(connectionKey);
-      agentCounted.add(connectionKey);
+      let connections = Number.isFinite(update.connections)
+        ? Math.max(0, Math.floor(update.connections || 0))
+        : undefined;
+      if (connections === undefined) {
+        // Connection key matches BatchBuffer's deduplication dimensions (minus minuteKey):
+        // domain, ip, full chain, rule, rulePayload, sourceIP.
+        const connectionKey = `${update.domain}:${update.ip}:${update.chains.join(' > ')}:${update.rule}:${update.rulePayload}:${update.sourceIP || ''}`;
+        connections = agentCounted.has(connectionKey) ? 0 : 1;
+        agentCounted.add(connectionKey);
+      }
 
       if (update.ip && update.ip !== '0.0.0.0' && update.ip !== '::') {
         const existing = geoBatchByIp.get(update.ip);
         if (existing) {
           existing.upload += update.upload;
           existing.download += update.download;
-          if (isNewThisFlush) existing.connections += 1;
+          existing.connections += connections;
           existing.timestampMs = Math.max(existing.timestampMs, update.timestampMs || 0);
         } else {
           geoBatchByIp.set(update.ip, {
             upload: update.upload,
             download: update.download,
-            connections: isNewThisFlush ? 1 : 0,
+            connections,
             timestampMs: update.timestampMs || Date.now(),
           });
         }
@@ -697,6 +705,7 @@ export async function createApp(options: AppOptions) {
         rulePayload: update.rulePayload,
         upload: update.upload,
         download: update.download,
+        connections,
         sourceIP: update.sourceIP,
         timestampMs: update.timestampMs,
       });
@@ -713,7 +722,7 @@ export async function createApp(options: AppOptions) {
           upload: update.upload,
           download: update.download,
         },
-        isNewThisFlush ? 1 : 0,
+        connections,
         update.timestampMs || Date.now(),
       );
     }

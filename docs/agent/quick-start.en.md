@@ -58,7 +58,7 @@ nekoagent status <instance>           # check running state
 nekoagent logs <instance>             # tail live logs
 nekoagent restart <instance>          # restart the process
 nekoagent stop <instance>             # graceful stop (up to ~12s for final flush)
-nekoagent update <instance>           # update to latest version
+nekoagent upgrade                     # global upgrade (CLI + binary)
 nekoagent remove <instance>           # stop + delete config
 ```
 

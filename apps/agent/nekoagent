@@ -132,6 +132,42 @@ get_local_binary_version() {
   fi
 }
 
+is_version_arg() {
+  v="${1:-}"
+  case "$v" in
+    ""|latest|agent-v*|v[0-9]*|[0-9]*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+normalize_version_tag() {
+  version_arg="${1:-latest}"
+  if [ "$version_arg" = "latest" ]; then
+    printf 'latest\n'
+    return 0
+  fi
+  case "$version_arg" in
+    agent-v*)
+      printf '%s\n' "$version_arg"
+      ;;
+    v*)
+      printf 'agent-%s\n' "$version_arg"
+      ;;
+    *)
+      printf 'agent-v%s\n' "$version_arg"
+      ;;
+  esac
+}
+
+target_plain_from_tag() {
+  tag="$1"
+  printf '%s\n' "${tag#agent-v}"
+}
+
 # ── Update / download binary ────────────────────────────────────────────────
 
 # Download, verify, and install a new neko-agent binary.
@@ -204,6 +240,35 @@ do_download_binary() {
   log "binary installed: $AGENT_BIN"
 }
 
+# Download and install the manager script itself.
+# Usage: do_download_manager <agent-tag>
+#   agent-tag: e.g. "agent-v0.2.0"
+do_download_manager() {
+  tag="$1"
+  manager_url="https://raw.githubusercontent.com/${AGENT_REPO}/${tag}/apps/agent/nekoagent"
+
+  tmp_dir="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp_dir'" EXIT INT TERM
+  new_manager="$tmp_dir/nekoagent"
+
+  log "downloading manager script: $manager_url"
+  download_file "$manager_url" "$new_manager"
+  chmod +x "$new_manager"
+
+  mkdir -p "$INSTALL_DIR"
+  manager_target="$INSTALL_DIR/nekoagent"
+  mv "$new_manager" "$manager_target"
+  log "manager installed: $manager_target"
+
+  current_path="$(command -v "$PROG" 2>/dev/null || true)"
+  if [ -n "$current_path" ] && [ "$current_path" != "$manager_target" ] && [ -w "$current_path" ]; then
+    cp "$manager_target" "$current_path"
+    chmod +x "$current_path" || true
+    log "manager synced to: $current_path"
+  fi
+}
+
 # ── Commands ────────────────────────────────────────────────────────────────
 
 version() {
@@ -229,7 +294,7 @@ Usage:
   $PROG status <name>                        Show instance status
   $PROG logs <name>                          Tail logs
   $PROG list                                 List configured instances
-  $PROG update|upgrade <name> [version]      Update binary and restart
+  $PROG upgrade [version]                    Upgrade manager+binary globally
   $PROG remove <name>                        Remove instance config/runtime
   $PROG delete <name>                        Alias of remove
   $PROG uninstall                            Uninstall nekoagent + binaries
@@ -246,9 +311,9 @@ Quick add with flags (auto-starts by default):
     [--gateway-token <token>] \
     [--no-start]        # skip auto-start after add
 
-Update examples:
-  $PROG update home-surge              # update to latest release
-  $PROG update home-surge agent-v0.2.0 # update to specific version
+Upgrade examples:
+  $PROG upgrade                        # upgrade to latest release
+  $PROG upgrade agent-v0.2.0           # upgrade to specific version
 
 Config and runtime paths:
   CONFIG_DIR=$CONFIG_DIR
@@ -277,11 +342,9 @@ Examples:
   # View logs
   $PROG logs home-surge
 
-  # Update to latest version
-  $PROG update home-surge
-
-  # Update to specific version
-  $PROG update home-surge agent-v0.2.0
+  # Global upgrade (recommended)
+  $PROG upgrade
+  $PROG upgrade agent-v0.2.0
 
   # Remove instance
   $PROG remove home-surge
@@ -557,52 +620,59 @@ cmd_list() {
   fi
 }
 
-cmd_update() {
-  name="$1"
-  version_arg="${2:-latest}"
-
+cmd_upgrade_global() {
+  version_arg="${1:-latest}"
   os="$(normalize_os)"
   arch="$(normalize_arch)"
 
-  # Determine the plain version string we're targeting (no "agent-v" prefix)
   if [ "$version_arg" = "latest" ]; then
     log "querying GitHub for latest release..."
-    remote_tag="$(get_latest_remote_tag "$AGENT_REPO")"
-    if [ -z "$remote_tag" ]; then
+    target_tag="$(get_latest_remote_tag "$AGENT_REPO")"
+    if [ -z "$target_tag" ]; then
       err "failed to determine latest version from GitHub API"
-      err "hint: check network access or specify a version: $PROG update $name agent-v0.2.0"
+      err "hint: check network access or specify a version: $PROG upgrade agent-v0.2.0"
       exit 1
     fi
-    target_plain="${remote_tag#agent-v}"
   else
-    case "$version_arg" in
-      agent-v*) target_plain="${version_arg#agent-v}" ;;
-      v*)       target_plain="${version_arg#v}" ;;
-      *)        target_plain="$version_arg" ;;
-    esac
+    target_tag="$(normalize_version_tag "$version_arg")"
   fi
+  target_plain="$(target_plain_from_tag "$target_tag")"
 
-  # Check local binary version — skip download if already up-to-date
   local_version="$(get_local_binary_version)"
+  binary_changed=false
   if [ -n "$local_version" ] && [ "$local_version" = "$target_plain" ]; then
-    log "binary already at $local_version, no download needed"
+    log "binary already at $local_version, no binary download needed"
   else
-    log "updating binary: ${local_version:-not installed} -> $target_plain"
-
-    was_running=false
-    if is_running "$name"; then
-      was_running=true
-      cmd_stop "$name"
-    fi
-
-    do_download_binary "$version_arg" "$os" "$arch"
-
-    if [ "$was_running" = true ]; then
-      cmd_start "$name"
-    fi
+    log "upgrading binary: ${local_version:-not installed} -> $target_plain"
+    do_download_binary "$target_tag" "$os" "$arch"
+    binary_changed=true
   fi
 
-  log "instance '$name' is at version $target_plain"
+  do_download_manager "$target_tag"
+
+  if [ "$binary_changed" = true ]; then
+    restarted_any=false
+    for f in "$CONFIG_DIR"/*.env; do
+      if [ ! -e "$f" ]; then
+        continue
+      fi
+      name="$(basename "$f" .env)"
+      if is_running "$name"; then
+        log "restarting running instance '$name'..."
+        cmd_stop "$name" || true
+        cmd_start "$name"
+        restarted_any=true
+      fi
+    done
+
+    if [ "$restarted_any" = false ]; then
+      log "no running instances found; binary upgraded globally"
+    fi
+  else
+    log "binary unchanged; skipped instance restart"
+  fi
+
+  log "upgrade complete: manager + binary at version $target_plain"
 }
 
 cmd_remove() {
@@ -668,12 +738,20 @@ main() {
         logs)    cmd_logs "$1" ;;
       esac
       ;;
-    update|upgrade)
-      if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+    upgrade)
+      if [ "$#" -gt 1 ]; then
         usage
         exit 1
       fi
-      cmd_update "$@"
+      if [ "$#" -eq 1 ] && ! is_version_arg "$1"; then
+        err "upgrade only accepts an optional version (e.g. agent-v0.2.0), not instance name"
+        exit 1
+      fi
+      cmd_upgrade_global "${1:-latest}"
+      ;;
+    update)
+      err "'update' command has been removed; use '$PROG upgrade [version]'"
+      exit 1
       ;;
     remove|delete)
       if [ "$#" -ne 1 ]; then

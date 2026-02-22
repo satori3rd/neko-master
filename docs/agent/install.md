@@ -46,7 +46,8 @@ curl -fsSL https://raw.githubusercontent.com/foru17/neko-master/main/apps/agent/
 nekoagent status <instance>
 nekoagent logs <instance>
 nekoagent restart <instance>
-nekoagent update <instance> agent-vX.Y.Z
+nekoagent upgrade
+nekoagent upgrade agent-vX.Y.Z
 nekoagent remove <instance>
 ```
 
@@ -68,7 +69,7 @@ nekoagent uninstall
 安装脚本在 `NEKO_INSTALL_DIR`（默认 `~/.local/bin`）中放置两个二进制文件：
 
 - `neko-agent` — 数据采集守护进程（持续运行，向面板上报数据）
-- `nekoagent` — CLI 管理器（Shell 脚本，管理实例生命周期：start / stop / update / remove）
+- `nekoagent` — CLI 管理器（Shell 脚本，管理实例生命周期：start / stop / upgrade / remove）
 
 `nekoagent` 管理器的存储位置：
 

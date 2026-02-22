@@ -270,7 +270,7 @@ nekoagent list               # 列出所有实例
 nekoagent status <instance>  # 查看运行状态
 nekoagent logs <instance>    # 实时日志
 nekoagent restart <instance> # 重启
-nekoagent update <instance>  # 更新到最新版
+nekoagent upgrade            # 全局升级（CLI + 二进制）
 ```
 
 > 脚本会自动检测已有安装，若已存在则只添加新实例而不重新下载二进制。

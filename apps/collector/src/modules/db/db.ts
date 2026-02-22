@@ -29,6 +29,7 @@ export interface TrafficUpdate {
   rulePayload: string;
   upload: number;
   download: number;
+  connections?: number;
   sourceIP?: string;
   timestampMs?: number;
 }

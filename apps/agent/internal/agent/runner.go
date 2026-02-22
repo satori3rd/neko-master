@@ -24,9 +24,16 @@ import (
 )
 
 type trackedFlow struct {
-	LastUpload int64
-	LastDown   int64
-	LastSeenMs int64
+	LastUpload  int64
+	LastDown    int64
+	LastSeenMs  int64
+	Counted     bool
+	Domain      string
+	IP          string
+	SourceIP    string
+	Chains      []string
+	Rule        string
+	RulePayload string
 }
 
 type reportPayload struct {
@@ -100,7 +107,7 @@ func (r *Runner) acquireLock() error {
 	// Use OS temp directory for lock file
 	lockDir := os.TempDir()
 	lockPath := fmt.Sprintf("%s/neko-agent-backend-%d.lock", lockDir, r.cfg.BackendID)
-	
+
 	// Check if lock file exists and if process is still running
 	if data, err := os.ReadFile(lockPath); err == nil {
 		var pid int
@@ -116,7 +123,7 @@ func (r *Runner) acquireLock() error {
 			}
 		}
 	}
-	
+
 	// Create lock file with exclusive flag (O_EXCL)
 	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
 	if err != nil {
@@ -125,7 +132,7 @@ func (r *Runner) acquireLock() error {
 		}
 		return fmt.Errorf("failed to create lock file: %w", err)
 	}
-	
+
 	// Write PID to lock file
 	pid := fmt.Sprintf("%d", os.Getpid())
 	if _, err := file.WriteString(pid); err != nil {
@@ -133,7 +140,7 @@ func (r *Runner) acquireLock() error {
 		os.Remove(lockPath)
 		return fmt.Errorf("failed to write PID to lock file: %w", err)
 	}
-	
+
 	r.lockFile = file
 	return nil
 }
@@ -407,6 +414,27 @@ func (r *Runner) ingestSnapshots(snapshots []domain.FlowSnapshot, nowMs int64) {
 		active[s.ID] = struct{}{}
 
 		prev, hasPrev := r.flows[s.ID]
+		counted := false
+		if hasPrev {
+			counted = prev.Counted
+		}
+		domainName := strings.TrimSpace(s.Domain)
+		ip := strings.TrimSpace(s.IP)
+		sourceIP := strings.TrimSpace(s.SourceIP)
+		chains := normalizeChains(s.Chains)
+		rule := defaultString(strings.TrimSpace(s.Rule), "Match")
+		rulePayload := strings.TrimSpace(s.RulePayload)
+		if hasPrev {
+			// Keep per-flow metadata stable once first seen, matching direct mode
+			// semantics in collector (existing connection fields are reused).
+			domainName = prev.Domain
+			ip = prev.IP
+			sourceIP = prev.SourceIP
+			chains = cloneStringSlice(prev.Chains)
+			rule = defaultString(prev.Rule, "Match")
+			rulePayload = prev.RulePayload
+		}
+
 		deltaUp := s.Upload
 		deltaDown := s.Download
 		if hasPrev {
@@ -422,7 +450,24 @@ func (r *Runner) ingestSnapshots(snapshots []domain.FlowSnapshot, nowMs int64) {
 			}
 		}
 
-		r.flows[s.ID] = trackedFlow{LastUpload: s.Upload, LastDown: s.Download, LastSeenMs: nowMs}
+		connections := int64(0)
+		if (deltaUp > 0 || deltaDown > 0) && !counted {
+			connections = 1
+			counted = true
+		}
+
+		r.flows[s.ID] = trackedFlow{
+			LastUpload:  s.Upload,
+			LastDown:    s.Download,
+			LastSeenMs:  nowMs,
+			Counted:     counted,
+			Domain:      domainName,
+			IP:          ip,
+			SourceIP:    sourceIP,
+			Chains:      cloneStringSlice(chains),
+			Rule:        rule,
+			RulePayload: rulePayload,
+		}
 		if deltaUp <= 0 && deltaDown <= 0 {
 			continue
 		}
@@ -433,15 +478,16 @@ func (r *Runner) ingestSnapshots(snapshots []domain.FlowSnapshot, nowMs int64) {
 		}
 
 		updates = append(updates, domain.TrafficUpdate{
-			Domain:      s.Domain,
-			IP:          s.IP,
-			Chain:       firstChain(s.Chains),
-			Chains:      s.Chains,
-			Rule:        defaultString(s.Rule, "Match"),
-			RulePayload: s.RulePayload,
+			Domain:      domainName,
+			IP:          ip,
+			Chain:       firstChain(chains),
+			Chains:      cloneStringSlice(chains),
+			Rule:        rule,
+			RulePayload: rulePayload,
 			Upload:      deltaUp,
 			Download:    deltaDown,
-			SourceIP:    s.SourceIP,
+			Connections: connections,
+			SourceIP:    sourceIP,
 			TimestampMs: ts,
 		})
 	}
@@ -630,6 +676,36 @@ func firstChain(chains []string) string {
 		return "DIRECT"
 	}
 	return strings.TrimSpace(chains[0])
+}
+
+func normalizeChains(chains []string) []string {
+	if len(chains) == 0 {
+		return []string{"DIRECT"}
+	}
+	out := make([]string, 0, len(chains))
+	for _, chain := range chains {
+		trimmed := strings.TrimSpace(chain)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+		if len(out) >= 12 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return []string{"DIRECT"}
+	}
+	return out
+}
+
+func cloneStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]string, len(values))
+	copy(cloned, values)
+	return cloned
 }
 
 func defaultString(v string, fallback string) string {

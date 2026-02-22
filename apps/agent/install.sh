@@ -392,7 +392,7 @@ main() {
 	echo "  nekoagent stop $NEKO_INSTANCE_NAME"
 	echo "  nekoagent status $NEKO_INSTANCE_NAME"
 	echo "  nekoagent logs $NEKO_INSTANCE_NAME"
-	echo "  nekoagent update $NEKO_INSTANCE_NAME"
+	echo "  nekoagent upgrade"
 	echo "  nekoagent remove $NEKO_INSTANCE_NAME"
 }
 

@@ -9,6 +9,7 @@ type TrafficUpdate struct {
 	RulePayload string   `json:"rulePayload,omitempty"`
 	Upload      int64    `json:"upload"`
 	Download    int64    `json:"download"`
+	Connections int64    `json:"connections,omitempty"`
 	SourceIP    string   `json:"sourceIP,omitempty"`
 	TimestampMs int64    `json:"timestampMs"`
 }

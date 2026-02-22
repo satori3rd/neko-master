@@ -142,7 +142,7 @@ describe('TrafficWriterRepository', () => {
 
     it('should correctly aggregate same-domain updates within a batch', () => {
       const now = Date.now();
-      const updates = Array.from({ length: 5 }, (_, i) => ({
+      const updates = Array.from({ length: 5 }, (_unused, _i) => ({
         domain: 'same.com',
         ip: '1.1.1.1',
         chain: 'ProxyA',
@@ -207,6 +207,45 @@ describe('TrafficWriterRepository', () => {
       expect(trend.length).toBeGreaterThanOrEqual(1);
       const total = trend.reduce((sum, t) => sum + t.upload + t.download, 0);
       expect(total).toBe(300);
+    });
+
+    it('should respect explicit connection deltas for continuous traffic', () => {
+      const now = Date.now();
+      const base = {
+        domain: 'stream.example',
+        ip: '9.9.9.9',
+        chain: 'ProxyA',
+        chains: ['ProxyA', 'Match'],
+        rule: 'Match',
+        rulePayload: '',
+        sourceIP: '192.168.1.30',
+      };
+
+      db.batchUpdateTrafficStats(backendId, [
+        {
+          ...base,
+          upload: 100,
+          download: 200,
+          connections: 1,
+          timestampMs: now,
+        },
+        {
+          ...base,
+          upload: 50,
+          download: 80,
+          connections: 0,
+          timestampMs: now + 1000,
+        },
+      ]);
+
+      const domains = db.getDomainStats(backendId, 10);
+      expect(domains.length).toBe(1);
+      expect(domains[0].totalUpload).toBe(150);
+      expect(domains[0].totalDownload).toBe(280);
+      expect(domains[0].totalConnections).toBe(1);
+
+      const summary = db.getSummary(backendId);
+      expect(summary.totalConnections).toBe(1);
     });
   });
 });

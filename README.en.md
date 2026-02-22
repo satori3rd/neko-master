@@ -278,7 +278,7 @@ nekoagent list               # list all instances
 nekoagent status <instance>  # check running state
 nekoagent logs <instance>    # tail live logs
 nekoagent restart <instance> # restart
-nekoagent update <instance>  # update to latest version
+nekoagent upgrade            # global upgrade (CLI + binary)
 ```
 
 > The script auto-detects an existing installation — if `neko-agent` is already present, it only adds the new instance without re-downloading.
