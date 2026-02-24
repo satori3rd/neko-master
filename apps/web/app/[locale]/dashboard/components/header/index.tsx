@@ -42,7 +42,7 @@ import { Switch } from "@/components/ui/switch";
 import { TimeRangePicker, LanguageSwitcher, ThemeToggle, ClientOnly } from "@/components/common";
 import { cn } from "@/lib/utils";
 import type { TimeRange } from "@/lib/api";
-import type { BackendStatus, TimePreset } from "@/lib/types/dashboard";
+import type { BackendStatus, TabId, TimePreset } from "@/lib/types/dashboard";
 
 interface BackendHealth {
   status: 'healthy' | 'unhealthy' | 'unknown';
@@ -95,6 +95,9 @@ interface HeaderProps {
   pathname: string;
   onNavigate: (path: string) => void;
 
+  // Active tab (to conditionally show time picker)
+  activeTab?: TabId;
+
   // Loading states
   isLoading: boolean;
   isTransitioning?: boolean;
@@ -124,11 +127,13 @@ export function Header({
   locale,
   pathname,
   onNavigate,
+  activeTab,
   isLoading,
   isTransitioning,
   backendT,
   dashboardT,
 }: HeaderProps) {
+  const showTimeRangePicker = true; // All tabs use the global time range picker
   const { logout, authState } = useAuth();
   const { data: authQueryState } = useAuthState(); // Added
   const isShowcase = authQueryState?.showcaseMode ?? false; // Added
@@ -353,13 +358,15 @@ export function Header({
 
           {/* Desktop: Language & Theme */}
           <div className="hidden sm:flex items-center gap-1">
-            <ClientOnly fallback={<div className="h-9 w-[152px] bg-secondary/45 rounded-xl" />}>
-              <TimeRangePicker
-                value={timeRange}
-                onChange={onTimeRangeChange}
-                showcaseMode={isShowcase}
-              />
-            </ClientOnly>
+            {showTimeRangePicker && (
+              <ClientOnly fallback={<div className="h-9 w-[152px] bg-secondary/45 rounded-xl" />}>
+                <TimeRangePicker
+                  value={timeRange}
+                  onChange={onTimeRangeChange}
+                  showcaseMode={isShowcase}
+                />
+              </ClientOnly>
+            )}
             <LanguageSwitcher />
 
             <ThemeToggle />
@@ -377,16 +384,18 @@ export function Header({
           </div>
 
           {/* Mobile: Time range picker */}
-          <div className="sm:hidden">
-            <ClientOnly fallback={<div className="h-9 w-[122px] bg-secondary/45 rounded-xl" />}>
-              <TimeRangePicker
-                value={timeRange}
-                onChange={onTimeRangeChange}
-                className="w-[122px]"
-                showcaseMode={isShowcase}
-              />
-            </ClientOnly>
-          </div>
+          {showTimeRangePicker && (
+            <div className="sm:hidden">
+              <ClientOnly fallback={<div className="h-9 w-[122px] bg-secondary/45 rounded-xl" />}>
+                <TimeRangePicker
+                  value={timeRange}
+                  onChange={onTimeRangeChange}
+                  className="w-[122px]"
+                  showcaseMode={isShowcase}
+                />
+              </ClientOnly>
+            </div>
+          )}
 
           {/* Mobile: Backend warning in top actions */}
           {backendStatus === "unhealthy" && (

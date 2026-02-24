@@ -6,12 +6,13 @@ import {
   keepPreviousData,
   useQuery,
 } from "@tanstack/react-query";
-import { Activity, BarChart3, Link2 } from "lucide-react";
+import { BarChart3, Link2 } from "lucide-react";
 import { StatsCards, TopDomainsChart } from "@/components/features/stats";
 import { OverviewTab } from "@/components/overview";
 import { InteractiveProxyStats } from "@/components/features/proxies";
 import { InteractiveDeviceStats } from "@/components/features/devices";
 import { InteractiveRuleStats } from "@/components/features/rules";
+import { HealthContent } from "@/components/features/health";
 import { WorldTrafficMap, CountryTrafficList } from "@/components/features/countries";
 import { DomainsTable, IPsTable } from "@/components/features/stats/table";
 import { Button } from "@/components/ui/button";
@@ -309,7 +310,6 @@ const NetworkContent = memo(function NetworkContent() {
   return (
     <div className="space-y-6">
       <div className="p-12 text-center text-muted-foreground border rounded-xl">
-        <Activity className="w-12 h-12 mx-auto mb-4 opacity-50" />
         <p>{t("comingSoon")}</p>
       </div>
     </div>
@@ -386,6 +386,8 @@ export function Content({
         );
       case "network":
         return <NetworkContent />;
+      case "health":
+        return <HealthContent timeRange={timeRange} />;
       default:
         return (
           <OverviewContent

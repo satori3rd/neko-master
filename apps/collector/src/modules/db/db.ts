@@ -18,6 +18,7 @@ import {
   TrafficWriterRepository,
   DomainRepository,
   BackendRepository,
+  HealthRepository,
 } from '../../database/repositories/index.js';
 
 export interface TrafficUpdate {
@@ -96,6 +97,7 @@ export class StatsDatabase {
     trafficWriter: TrafficWriterRepository;
     domain: DomainRepository;
     backend: BackendRepository;
+    health: HealthRepository;
   };
 
   constructor(dbPath = 'stats.db') {
@@ -116,6 +118,7 @@ export class StatsDatabase {
       trafficWriter: new TrafficWriterRepository(this.db),
       domain: new DomainRepository(this.db),
       backend: new BackendRepository(this.db),
+      health: new HealthRepository(this.db),
     };
   }
 

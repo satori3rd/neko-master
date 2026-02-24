@@ -11,6 +11,7 @@
     "proxies": "Proxies",
     "rules": "Rules",
     "network": "Network",
+    "health": "Health",
     "settings": "Settings",
     "showcaseMode": "Showcase Mode"
   },
@@ -533,5 +534,30 @@
       "emergencyResetDescription": "You are currently in Emergency Access Mode. After resetting the token, the old one will be invalid.",
       "emergencyResetWarning": "For your security, please remove the backend environment variable FORCE_ACCESS_CONTROL_OFF and restart the service after the reset is complete."
     }
+  },
+  "health": {
+    "title": "Node Health",
+    "subtitle": "Monitor the online status and data collection continuity of each backend",
+    "uptime": "uptime",
+    "latency": "Latency",
+    "avgLatency": "Avg latency",
+    "maxLatency": "Max latency",
+    "gaps": "gap(s)",
+    "statusHealthy": "Online",
+    "statusUnhealthy": "Offline",
+    "statusUnknown": "Unknown",
+    "noData": "No data",
+    "overallUptime": "Overall Uptime",
+    "healthyBackends": "Healthy",
+    "unhealthyBackends": "Unhealthy",
+    "backendsMonitored": "Total Backends",
+    "overallAvgLatency": "Avg Latency",
+    "granularity": "Bucket Size",
+    "minuteBucket": "{n} min/bar",
+    "hourBucket": "{n} hr/bar",
+    "backendStatus": "Backend Status",
+    "noBackends": "No health records yet",
+    "noBackendsHint": "Health checks run automatically every minute for all enabled backends and will appear here",
+    "checkInterval": "Health checks are recorded once per minute. Gaps indicate the collector service was interrupted."
   }
 }

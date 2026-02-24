@@ -18,3 +18,4 @@ export { RuleRepository } from './rule.repository.js';
 export { IPRepository } from './ip.repository.js';
 export { ConfigRepository, type GeoLookupConfig, type GeoLookupProvider } from './config.repository.js';
 export { TrafficWriterRepository, type TrafficUpdate } from './traffic-writer.repository.js';
+export { HealthRepository, type HealthLogRow, type HealthStatus } from './health.repository.js';

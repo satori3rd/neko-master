@@ -425,6 +425,19 @@ export const SCHEMA = {
       FOREIGN KEY (backend_id) REFERENCES backend_configs(id) ON DELETE CASCADE
     );
   `,
+
+  // Backend health check log - one row per minute per backend
+  BACKEND_HEALTH_LOGS: `
+    CREATE TABLE IF NOT EXISTS backend_health_logs (
+      backend_id INTEGER NOT NULL,
+      minute TEXT NOT NULL,
+      status TEXT NOT NULL,
+      latency_ms INTEGER,
+      message TEXT,
+      PRIMARY KEY (backend_id, minute),
+      FOREIGN KEY (backend_id) REFERENCES backend_configs(id) ON DELETE CASCADE
+    );
+  `,
 } as const;
 
 // Index definitions
@@ -488,6 +501,9 @@ export const INDEXES = [
   // Agent heartbeat indexes
   `CREATE INDEX IF NOT EXISTS idx_agent_heartbeats_last_seen ON agent_heartbeats(last_seen);`,
 
+  // Backend health log indexes
+  `CREATE INDEX IF NOT EXISTS idx_backend_health_logs_backend_minute ON backend_health_logs(backend_id, minute);`,
+
   // Surge policy cache indexes
   `CREATE INDEX IF NOT EXISTS idx_surge_policy_backend ON surge_policy_cache(backend_id);`,
   `CREATE INDEX IF NOT EXISTS idx_surge_policy_updated ON surge_policy_cache(updated_at);`,
@@ -539,6 +555,7 @@ export function getAllSchemaStatements(): string[] {
     SCHEMA.BACKEND_CONFIGS,
     SCHEMA.AGENT_HEARTBEATS,
     SCHEMA.AGENT_SNAPSHOTS,
+    SCHEMA.BACKEND_HEALTH_LOGS,
     SCHEMA.APP_CONFIG,
     SCHEMA.SURGE_POLICY_CACHE,
     SCHEMA.AUTH_CONFIG,

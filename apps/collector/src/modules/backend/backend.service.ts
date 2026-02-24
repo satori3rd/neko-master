@@ -22,6 +22,7 @@ import { loadClickHouseConfig, runClickHouseQuery } from '../clickhouse/clickhou
 import type { ClickHouseConfig } from '../clickhouse/clickhouse.config.js';
 
 import type { AuthService } from '../auth/auth.service.js';
+import type { HealthLogRow } from '../../database/repositories/health.repository.js';
 
 /**
  * Mask URL for showcase mode - hides host, port, credentials
@@ -94,12 +95,20 @@ export class BackendService {
   }
 
   /**
-   * Run health checks for all listening backends
+   * Truncate a timestamp to the current UTC minute string "YYYY-MM-DDTHH:MM"
+   */
+  private toMinuteKey(ts: number): string {
+    return new Date(ts).toISOString().slice(0, 16);
+  }
+
+  /**
+   * Run health checks for all listening backends and persist results.
    */
   private async runHealthChecks(): Promise<void> {
     const backends = this.db.getListeningBackends();
     const now = Date.now();
-    
+    const minute = this.toMinuteKey(now);
+
     for (const backend of backends) {
       try {
         if (isAgentBackendUrl(backend.url)) {
@@ -110,6 +119,7 @@ export class BackendService {
             console.log(`[BackendService] Health check for ${backend.name}: ${health.status}${health.message ? ` - ${health.message}` : ''}`);
           }
           this.healthStatus.set(backend.id, health);
+          this.db.repos.health.writeHealthLog(backend.id, minute, health.status, undefined, health.message);
           continue;
         }
 
@@ -120,21 +130,28 @@ export class BackendService {
           type: backend.type,
         });
         const latency = Date.now() - startTime;
-        
+
         const health: BackendHealthInfo = {
           status: result.success ? 'healthy' : 'unhealthy',
           lastChecked: Date.now(),
           message: result.message,
           latency: result.success ? latency : undefined,
         };
-        
+
         // Only log when status changes or on failure
         const prevHealth = this.healthStatus.get(backend.id);
         if (!result.success || prevHealth?.status !== health.status) {
           console.log(`[BackendService] Health check for ${backend.name}: ${health.status}${result.message ? ` - ${result.message}` : ''}`);
         }
-        
+
         this.healthStatus.set(backend.id, health);
+        this.db.repos.health.writeHealthLog(
+          backend.id,
+          minute,
+          health.status,
+          result.success ? latency : undefined,
+          result.message,
+        );
       } catch (error) {
         const health: BackendHealthInfo = {
           status: 'unhealthy',
@@ -142,9 +159,20 @@ export class BackendService {
           message: error instanceof Error ? error.message : 'Health check failed',
         };
         this.healthStatus.set(backend.id, health);
+        this.db.repos.health.writeHealthLog(backend.id, minute, 'unhealthy', undefined, health.message);
         console.warn(`[BackendService] Health check error for ${backend.name}:`, error);
       }
     }
+  }
+
+  /**
+   * Get health history for all backends (or a single one) over the given UTC ISO range.
+   */
+  getHealthHistory(fromISO: string, toISO: string, backendId?: number): HealthLogRow[] {
+    if (backendId !== undefined) {
+      return this.db.repos.health.getHealthHistory(backendId, fromISO, toISO);
+    }
+    return this.db.repos.health.getHealthHistoryAll(fromISO, toISO);
   }
 
   /**
@@ -350,6 +378,7 @@ export class BackendService {
   async clearBackendData(id: number): Promise<{ message: string }> {
     await this.clearClickHouseBackendData(id);
     this.db.deleteBackendData(id);
+    this.db.repos.health.deleteByBackend(id);
     // Also clear realtime cache
     this.realtimeStore.clearBackend(id);
     this.onBackendDataCleared?.(id);

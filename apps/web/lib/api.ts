@@ -117,6 +117,19 @@ export interface BackendHealth {
   latency?: number;
 }
 
+export interface BackendHealthPoint {
+  time: string;
+  status: 'healthy' | 'unhealthy' | 'unknown';
+  latency_ms: number | null;
+  message: string | null;
+}
+
+export interface BackendHealthHistory {
+  backendId: number;
+  backendName: string;
+  points: BackendHealthPoint[];
+}
+
 export interface Backend {
   id: number;
   name: string;
@@ -549,6 +562,15 @@ export const api = {
 
   rotateAgentToken: (id: number) =>
     fetchJson<{ message: string; agentToken: string }>(`${API_BASE}/backends/${id}/rotate-agent-token`, 'POST'),
+
+  getBackendHealthHistory: (opts?: { from?: string; to?: string; backendId?: number }) =>
+    fetchJson<BackendHealthHistory[]>(
+      buildUrl(`${API_BASE}/backends/health/history`, {
+        from: opts?.from,
+        to: opts?.to,
+        backendId: opts?.backendId,
+      })
+    ),
     
   // Database management
   getDbStats: async () => {

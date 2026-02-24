@@ -73,6 +73,7 @@ export default function DashboardPage() {
           listeningBackends={listeningBackends}
           backendStatus={backendStatus}
           backendStatusHint={backendStatusHint}
+          activeTab={activeTab}
           timeRange={timeRange}
           onTimeRangeChange={handleTimeRangeChange}
           autoRefresh={autoRefresh}

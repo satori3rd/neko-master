@@ -16,7 +16,8 @@ import {
   Smartphone,
   RefreshCw,
   X,
-  ShieldAlert, // Added
+  ShieldAlert,
+  HeartPulse,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -51,6 +52,7 @@ const NAV_ITEMS = [
   { id: "countries", icon: MapPin },
   { id: "proxies", icon: Server },
   { id: "devices", icon: Smartphone },
+  { id: "health", icon: HeartPulse },
 ];
 
 export function Navigation({
