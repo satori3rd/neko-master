@@ -2,6 +2,18 @@
 import { WebSocket } from 'ws';
 import { StatsSummary } from '@neko-master/shared';
 
+export type SummaryFieldKey =
+  | 'totals'
+  | 'topDomains'
+  | 'topIPs'
+  | 'proxyStats'
+  | 'countryStats'
+  | 'deviceStats'
+  | 'ruleStats'
+  | 'hourlyStats';
+
+export type SummaryFieldMask = Record<SummaryFieldKey, boolean>;
+
 // --- Client Request / Message Types ---
 
 export interface WebSocketMessage {
@@ -11,6 +23,7 @@ export interface WebSocketMessage {
   end?: string;
   minPushIntervalMs?: number;
   includeSummary?: boolean;
+  summaryFields?: SummaryFieldKey[];
 
   // Trend
   includeTrend?: boolean;
@@ -103,6 +116,7 @@ export interface ClientInfo {
   range: ClientRange;
   minPushIntervalMs: number;
   includeSummary: boolean;
+  summaryFields: SummaryFieldMask;
   lastSentAt: number;
   trend: ClientTrend;
   deviceDetail: ClientDeviceDetail;

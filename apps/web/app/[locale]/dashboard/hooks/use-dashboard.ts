@@ -21,7 +21,7 @@ import {
   getSummaryQueryKey,
 } from "@/lib/stats-query-keys";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
-import { useStatsWebSocket } from "@/lib/websocket";
+import { useStatsWebSocket, type SummaryField } from "@/lib/websocket";
 import { useRequireAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import type {
@@ -124,8 +124,26 @@ export function useDashboard(): UseDashboardReturn {
     activeTab === "overview" ||
     activeTab === "countries" ||
     activeTab === "proxies" ||
-    activeTab === "rules" ||
     activeTab === "devices";
+
+  const wsSummaryFields = useMemo<SummaryField[] | undefined>(() => {
+    switch (activeTab) {
+      case "overview":
+        return ["totals", "topDomains", "proxyStats", "countryStats"];
+      case "countries":
+        return ["countryStats"];
+      case "proxies":
+        return ["proxyStats"];
+      case "devices":
+        return ["deviceStats"];
+      default:
+        return undefined;
+    }
+  }, [activeTab]);
+
+  const wsSummaryFieldSet = useMemo(() => {
+    return new Set<SummaryField>(wsSummaryFields ?? []);
+  }, [wsSummaryFields]);
   
   // Auth check
   const { showLogin, isLoading: isAuthLoading } = useRequireAuth();
@@ -157,16 +175,51 @@ export function useDashboard(): UseDashboardReturn {
     backendId: activeBackendId,
     range: stableTimeRange,
     minPushIntervalMs: SUMMARY_WS_MIN_PUSH_MS,
+    summaryFields: wsSummaryFields,
     enabled: wsEnabled,
     onMessage: useCallback(
       (stats: StatsSummary) => {
         if (!activeBackendId) return;
         setAutoRefreshTick((tick) => (tick + 1) % 3600);
+
+        const summaryPatch: Partial<StatsSummary> = {};
+
+        if (wsSummaryFieldSet.has("totals")) {
+          summaryPatch.totalUpload = stats.totalUpload;
+          summaryPatch.totalDownload = stats.totalDownload;
+          summaryPatch.totalConnections = stats.totalConnections;
+          summaryPatch.totalDomains = stats.totalDomains;
+          summaryPatch.totalIPs = stats.totalIPs;
+          summaryPatch.totalProxies = stats.totalProxies;
+          summaryPatch.totalRules = stats.totalRules;
+        }
+        if (wsSummaryFieldSet.has("topDomains")) {
+          summaryPatch.topDomains = stats.topDomains;
+        }
+        if (wsSummaryFieldSet.has("topIPs")) {
+          summaryPatch.topIPs = stats.topIPs;
+        }
+        if (wsSummaryFieldSet.has("proxyStats")) {
+          summaryPatch.proxyStats = stats.proxyStats;
+        }
+        if (wsSummaryFieldSet.has("countryStats") && stats.countryStats) {
+          summaryPatch.countryStats = stats.countryStats;
+        }
+        if (wsSummaryFieldSet.has("deviceStats") && stats.deviceStats) {
+          summaryPatch.deviceStats = stats.deviceStats;
+        }
+        if (wsSummaryFieldSet.has("ruleStats") && stats.ruleStats) {
+          summaryPatch.ruleStats = stats.ruleStats;
+        }
+        if (wsSummaryFieldSet.has("hourlyStats")) {
+          summaryPatch.hourlyStats = stats.hourlyStats;
+        }
+
         queryClient.setQueryData(
           getSummaryQueryKey(activeBackendId, stableTimeRange),
           (previous) => ({
             ...(typeof previous === "object" && previous ? previous : {}),
-            ...stats,
+            ...summaryPatch,
           })
         );
         if (stats.countryStats) {
@@ -182,27 +235,31 @@ export function useDashboard(): UseDashboardReturn {
           );
         }
       },
-      [activeBackendId, queryClient, stableTimeRange]
+      [activeBackendId, queryClient, stableTimeRange, wsSummaryFieldSet]
     ),
   });
 
   const wsConnected = wsStatus === "connected";
   const wsRealtimeActive = wsEnabled && wsConnected;
   const shouldReducePolling = wsRealtimeActive;
+  const shouldUseHttpFallback =
+    !wsEnabled || wsStatus === "disconnected" || wsStatus === "error";
   const fallbackRefetchInterval =
-    autoRefresh && isWsSummaryTab && !wsRealtimeActive ? 5000 : false;
+    autoRefresh && isWsSummaryTab && shouldUseHttpFallback ? 5000 : false;
   const hasWsCountries =
     wsRealtimeActive &&
     !!wsSummary?.countryStats &&
     (activeTab === "overview" || activeTab === "countries");
 
+  const needsSummaryData =
+    activeTab === "overview" || activeTab === "proxies" || activeTab === "devices";
   const needsCountries = activeTab === "overview" || activeTab === "countries";
 
   // Stats Queries
   const summaryQuery = useQuery({
     queryKey: getSummaryQueryKey(activeBackendId, stableTimeRange),
     queryFn: () => api.getSummary(activeBackendId, stableTimeRange),
-    enabled: !!activeBackendId && isWsSummaryTab && !(wsEnabled && wsConnected),
+    enabled: !!activeBackendId && needsSummaryData && shouldUseHttpFallback,
     placeholderData: keepPreviousData,
     refetchInterval: fallbackRefetchInterval,
     refetchIntervalInBackground: true,
@@ -211,7 +268,7 @@ export function useDashboard(): UseDashboardReturn {
   const countriesQuery = useQuery({
     queryKey: getCountriesQueryKey(activeBackendId, 50, stableTimeRange),
     queryFn: () => api.getCountries(activeBackendId, 50, stableTimeRange),
-    enabled: !!activeBackendId && needsCountries && !hasWsCountries,
+    enabled: !!activeBackendId && needsCountries && !hasWsCountries && shouldUseHttpFallback,
     placeholderData: keepPreviousData,
     refetchInterval: needsCountries ? fallbackRefetchInterval : false,
     refetchIntervalInBackground: true,

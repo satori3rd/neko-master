@@ -2,6 +2,7 @@ import { WebSocketServer as WSServer, WebSocket } from 'ws';
 import type { StatsSummary, DomainStats, IPStats, ProxyStats, CountryStats, DeviceStats, RuleStats, HourlyStats } from '@neko-master/shared';
 import type { StatsDatabase } from '../db/db.js';
 import type { StatsService } from '../stats/stats.service.js';
+import type { SummaryFieldKey, SummaryFieldMask } from './websocket.types.js';
 import { AuthService } from '../auth/auth.service.js';
 import { IncomingMessage } from 'http';
 import { URL } from 'url';
@@ -13,6 +14,7 @@ export interface WebSocketMessage {
   end?: string;
   minPushIntervalMs?: number;
   includeSummary?: boolean;
+  summaryFields?: SummaryFieldKey[];
   includeTrend?: boolean;
   trendMinutes?: number;
   trendBucketMinutes?: number;
@@ -89,6 +91,7 @@ interface ClientInfo {
   range: ClientRange;
   minPushIntervalMs: number;
   includeSummary: boolean;
+  summaryFields: SummaryFieldMask;
   lastSentAt: number;
   trend: ClientTrend;
   deviceDetail: ClientDeviceDetail;
@@ -98,6 +101,49 @@ interface ClientInfo {
   domainsPage: ClientDomainsPage;
   ipsPage: ClientIPsPage;
 }
+
+const SUMMARY_FIELD_KEYS: SummaryFieldKey[] = [
+  'totals',
+  'topDomains',
+  'topIPs',
+  'proxyStats',
+  'countryStats',
+  'deviceStats',
+  'ruleStats',
+  'hourlyStats',
+];
+
+const SUMMARY_FIELD_KEY_SET = new Set<SummaryFieldKey>(SUMMARY_FIELD_KEYS);
+
+const DEFAULT_SUMMARY_FIELDS: SummaryFieldMask = {
+  totals: true,
+  topDomains: true,
+  topIPs: true,
+  proxyStats: true,
+  countryStats: true,
+  deviceStats: true,
+  ruleStats: true,
+  hourlyStats: true,
+};
+
+const EMPTY_SUMMARY_FIELDS: SummaryFieldMask = {
+  totals: false,
+  topDomains: false,
+  topIPs: false,
+  proxyStats: false,
+  countryStats: false,
+  deviceStats: false,
+  ruleStats: false,
+  hourlyStats: false,
+};
+
+const ZERO_BASE_SUMMARY = {
+  totalConnections: 0,
+  totalUpload: 0,
+  totalDownload: 0,
+  uniqueDomains: 0,
+  uniqueIPs: 0,
+};
 
 export class StatsWebSocketServer {
   private wss: WSServer | null = null;
@@ -111,14 +157,14 @@ export class StatsWebSocketServer {
   // Cache for expensive full-summary queries: avoids re-querying all 8 base tables
   // when multiple broadcasts fire within a short window.
   private baseSummaryCache = new Map<string, {
-    summary: { totalConnections: number; totalUpload: number; totalDownload: number; uniqueDomains: number; uniqueIPs: number };
-    topDomains: DomainStats[];
-    topIPs: IPStats[];
-    proxyStats: ProxyStats[];
-    countryStats: CountryStats[];
-    deviceStats: DeviceStats[];
-    ruleStats: RuleStats[];
-    hourlyStats: HourlyStats[];
+    summary?: { totalConnections: number; totalUpload: number; totalDownload: number; uniqueDomains: number; uniqueIPs: number };
+    topDomains?: DomainStats[];
+    topIPs?: IPStats[];
+    proxyStats?: ProxyStats[];
+    countryStats?: CountryStats[];
+    deviceStats?: DeviceStats[];
+    ruleStats?: RuleStats[];
+    hourlyStats?: HourlyStats[];
     ts: number;
   }>();
   private static BASE_SUMMARY_CACHE_TTL_MS = 2000;
@@ -207,6 +253,7 @@ export class StatsWebSocketServer {
         range: {},
         minPushIntervalMs: 0,
         includeSummary: true,
+        summaryFields: { ...DEFAULT_SUMMARY_FIELDS },
         lastSentAt: 0,
         trend: null,
         deviceDetail: null,
@@ -272,6 +319,17 @@ export class StatsWebSocketServer {
               const nextIncludeSummary = msg.includeSummary !== false;
               if (nextIncludeSummary !== clientInfo.includeSummary) {
                 clientInfo.includeSummary = nextIncludeSummary;
+                changed = true;
+              }
+            }
+
+            if (msg.summaryFields !== undefined) {
+              const parsedSummaryFields = this.parseSummaryFields(
+                msg.summaryFields,
+                clientInfo.summaryFields,
+              );
+              if (!this.isSummaryFieldsEqual(clientInfo.summaryFields, parsedSummaryFields)) {
+                clientInfo.summaryFields = parsedSummaryFields;
                 changed = true;
               }
             }
@@ -457,6 +515,81 @@ export class StatsWebSocketServer {
     if (!Number.isFinite(value)) return fallback;
     // Keep range conservative to avoid client misuse.
     return Math.max(0, Math.min(60_000, Math.floor(value)));
+  }
+
+  private parseSummaryFields(
+    value: SummaryFieldKey[] | undefined,
+    fallback: SummaryFieldMask,
+  ): SummaryFieldMask {
+    if (!Array.isArray(value)) {
+      return fallback;
+    }
+
+    if (value.length === 0) {
+      return { ...DEFAULT_SUMMARY_FIELDS };
+    }
+
+    const parsed: SummaryFieldMask = { ...EMPTY_SUMMARY_FIELDS };
+    let hasKnownField = false;
+
+    for (const candidate of value) {
+      if (typeof candidate !== 'string') {
+        continue;
+      }
+
+      const key = candidate.trim() as SummaryFieldKey;
+      if (!SUMMARY_FIELD_KEY_SET.has(key)) {
+        continue;
+      }
+
+      parsed[key] = true;
+      hasKnownField = true;
+    }
+
+    return hasKnownField ? parsed : fallback;
+  }
+
+  private isSummaryFieldsEqual(
+    a: SummaryFieldMask,
+    b: SummaryFieldMask,
+  ): boolean {
+    for (const key of SUMMARY_FIELD_KEYS) {
+      if (!!a[key] !== !!b[key]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private hasAnySummaryFields(fields: SummaryFieldMask): boolean {
+    for (const key of SUMMARY_FIELD_KEYS) {
+      if (fields[key]) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private needsCoreSummary(fields: SummaryFieldMask): boolean {
+    return (
+      fields.totals ||
+      fields.topDomains ||
+      fields.topIPs ||
+      fields.proxyStats ||
+      fields.ruleStats ||
+      fields.hourlyStats
+    );
+  }
+
+  private buildSummaryFieldsKey(fields: SummaryFieldMask): string {
+    const enabledFields = SUMMARY_FIELD_KEYS.filter((field) => fields[field]);
+    return enabledFields.length > 0 ? enabledFields.join(',') : 'none';
+  }
+
+  private buildSummaryFieldList(fields: SummaryFieldMask): SummaryFieldKey[] {
+    return SUMMARY_FIELD_KEYS.filter((field) => fields[field]);
   }
 
   private isRangeEqual(a: ClientRange, b: ClientRange): boolean {
@@ -800,6 +933,7 @@ export class StatsWebSocketServer {
     domainsPage: ClientDomainsPage,
     ipsPage: ClientIPsPage,
     wantsFullSummary = true,
+    summaryFields: SummaryFieldMask = DEFAULT_SUMMARY_FIELDS,
   ): Promise<StatsSummary | null> {
     this.wsMetrics.getStatsCalls += 1;
     const resolvedBackendId = this.resolveBackendId(backendId);
@@ -807,7 +941,13 @@ export class StatsWebSocketServer {
       return null;
     }
 
-    if (wantsFullSummary) {
+    const includeSummaryData = wantsFullSummary && this.hasAnySummaryFields(summaryFields);
+    const needsCoreSummary = includeSummaryData && this.needsCoreSummary(summaryFields);
+    const summaryFieldsKey = includeSummaryData
+      ? this.buildSummaryFieldsKey(summaryFields)
+      : 'none';
+
+    if (needsCoreSummary) {
       this.wsMetrics.fullSummaryCalls += 1;
     }
     if (trend) this.wsMetrics.trendCalls += 1;
@@ -819,11 +959,11 @@ export class StatsWebSocketServer {
     }
 
     const cacheTTL = this.getBaseSummaryCacheTTL(range);
-    const baseCacheKey = `${resolvedBackendId}|${range.start || ''}|${range.end || ''}`;
+    const baseCacheKey = `${resolvedBackendId}|${range.start || ''}|${range.end || ''}|${summaryFieldsKey}`;
     let baseCached = this.baseSummaryCache.get(baseCacheKey);
     const baseCacheValid = baseCached && Date.now() - baseCached.ts < cacheTTL;
 
-    if (wantsFullSummary) {
+    if (includeSummaryData) {
       if (baseCacheValid) {
         this.wsMetrics.baseCacheHit += 1;
       } else {
@@ -842,32 +982,73 @@ export class StatsWebSocketServer {
       active: true 
     };
 
-    if (wantsFullSummary && !baseCacheValid) {
-      const [summaryRes, countryStats, deviceStats] = await Promise.all([
-        this.statsService.getSummaryWithRouting(resolvedBackendId, timeRange),
-        this.statsService.getCountryStatsWithRouting(resolvedBackendId, timeRange, 50),
-        this.statsService.getDeviceStatsWithRouting(resolvedBackendId, timeRange, 50),
+    if (includeSummaryData && !baseCacheValid) {
+      const needsCountryStats = summaryFields.countryStats;
+      const needsDeviceStats = summaryFields.deviceStats;
+
+      const [summaryRes, countryStatsRes, deviceStatsRes] = await Promise.all([
+        needsCoreSummary
+          ? this.statsService.getSummaryWithRouting(resolvedBackendId, timeRange)
+          : Promise.resolve(null),
+        needsCountryStats
+          ? this.statsService.getCountryStatsWithRouting(resolvedBackendId, timeRange, 50)
+          : Promise.resolve(undefined),
+        needsDeviceStats
+          ? this.statsService.getDeviceStatsWithRouting(resolvedBackendId, timeRange, 50)
+          : Promise.resolve(undefined),
       ]);
 
-      baseCached = {
-        summary: {
-          totalConnections: summaryRes.totalConnections,
-          totalUpload: summaryRes.totalUpload,
-          totalDownload: summaryRes.totalDownload,
-          uniqueDomains: summaryRes.totalDomains,
-          uniqueIPs: summaryRes.totalIPs,
-        },
-        topDomains: summaryRes.topDomains,
-        topIPs: summaryRes.topIPs,
-        proxyStats: summaryRes.proxyStats,
-        ruleStats: summaryRes.ruleStats || [],
-        hourlyStats: summaryRes.hourlyStats,
-        countryStats,
-        deviceStats,
+      const nextCached: {
+        summary?: { totalConnections: number; totalUpload: number; totalDownload: number; uniqueDomains: number; uniqueIPs: number };
+        topDomains?: DomainStats[];
+        topIPs?: IPStats[];
+        proxyStats?: ProxyStats[];
+        countryStats?: CountryStats[];
+        deviceStats?: DeviceStats[];
+        ruleStats?: RuleStats[];
+        hourlyStats?: HourlyStats[];
+        ts: number;
+      } = {
         ts: Date.now(),
       };
 
-      this.baseSummaryCache.set(baseCacheKey, baseCached);
+      if (summaryRes) {
+        if (summaryFields.totals) {
+          nextCached.summary = {
+            totalConnections: summaryRes.totalConnections,
+            totalUpload: summaryRes.totalUpload,
+            totalDownload: summaryRes.totalDownload,
+            uniqueDomains: summaryRes.totalDomains,
+            uniqueIPs: summaryRes.totalIPs,
+          };
+        }
+        if (summaryFields.topDomains) {
+          nextCached.topDomains = summaryRes.topDomains;
+        }
+        if (summaryFields.topIPs) {
+          nextCached.topIPs = summaryRes.topIPs;
+        }
+        if (summaryFields.proxyStats) {
+          nextCached.proxyStats = summaryRes.proxyStats;
+        }
+        if (summaryFields.ruleStats) {
+          nextCached.ruleStats = summaryRes.ruleStats || [];
+        }
+        if (summaryFields.hourlyStats) {
+          nextCached.hourlyStats = summaryRes.hourlyStats;
+        }
+      }
+
+      if (needsCountryStats) {
+        nextCached.countryStats = countryStatsRes;
+      }
+
+      if (needsDeviceStats) {
+        nextCached.deviceStats = deviceStatsRes;
+      }
+
+      baseCached = nextCached;
+      this.baseSummaryCache.set(baseCacheKey, nextCached);
       for (const [key, val] of this.baseSummaryCache) {
         if (Date.now() - val.ts > cacheTTL * 2) {
           this.baseSummaryCache.delete(key);
@@ -875,14 +1056,14 @@ export class StatsWebSocketServer {
       }
     }
 
-    const summary = wantsFullSummary ? baseCached!.summary : { totalUpload: 0, totalDownload: 0, totalConnections: 0, uniqueDomains: 0, uniqueIPs: 0 };
-    const topDomains = wantsFullSummary ? baseCached!.topDomains : [];
-    const topIPs = wantsFullSummary ? baseCached!.topIPs : [];
-    const proxyStats = wantsFullSummary ? baseCached!.proxyStats : [];
-    const countryStats = wantsFullSummary ? baseCached!.countryStats : undefined;
-    const deviceStats = wantsFullSummary ? baseCached!.deviceStats : undefined;
-    const ruleStats = wantsFullSummary ? baseCached!.ruleStats : undefined;
-    const hourlyStats = wantsFullSummary ? baseCached!.hourlyStats : [];
+    const summary = includeSummaryData ? (baseCached?.summary || ZERO_BASE_SUMMARY) : ZERO_BASE_SUMMARY;
+    const topDomains = includeSummaryData ? (baseCached?.topDomains || []) : [];
+    const topIPs = includeSummaryData ? (baseCached?.topIPs || []) : [];
+    const proxyStats = includeSummaryData ? (baseCached?.proxyStats || []) : [];
+    const countryStats = includeSummaryData ? baseCached?.countryStats : undefined;
+    const deviceStats = includeSummaryData ? baseCached?.deviceStats : undefined;
+    const ruleStats = includeSummaryData ? baseCached?.ruleStats : undefined;
+    const hourlyStats = includeSummaryData ? (baseCached?.hourlyStats || []) : [];
 
     const fetches: Promise<void>[] = [];
     
@@ -972,12 +1153,16 @@ export class StatsWebSocketServer {
         clientInfo.domainsPage,
         clientInfo.ipsPage,
         clientInfo.includeSummary,
+        clientInfo.summaryFields,
       );
 
       if (!stats) return;
 
       const message: WebSocketMessage = {
         type: 'stats',
+        summaryFields: clientInfo.includeSummary
+          ? this.buildSummaryFieldList(clientInfo.summaryFields)
+          : undefined,
         data: stats,
         timestamp: new Date().toISOString(),
       };
@@ -1033,6 +1218,9 @@ export class StatsWebSocketServer {
           ? `${clientInfo.trend.minutes}|${clientInfo.trend.bucketMinutes}`
           : '';
         const includeSummaryKey = clientInfo.includeSummary ? '1' : '0';
+        const summaryFieldsKey = clientInfo.includeSummary
+          ? this.buildSummaryFieldsKey(clientInfo.summaryFields)
+          : 'none';
         const deviceDetailKey = clientInfo.deviceDetail
           ? `${clientInfo.deviceDetail.sourceIP}|${clientInfo.deviceDetail.limit}`
           : '';
@@ -1049,7 +1237,7 @@ export class StatsWebSocketServer {
         const ipsPageKey = clientInfo.ipsPage
           ? `${clientInfo.ipsPage.offset}|${clientInfo.ipsPage.limit}|${clientInfo.ipsPage.sortBy || ''}|${clientInfo.ipsPage.sortOrder || ''}|${clientInfo.ipsPage.search || ''}`
           : '';
-        const cacheKey = `${resolvedBackendId}|${clientInfo.range.start || ''}|${clientInfo.range.end || ''}|${includeSummaryKey}|${trendKey}|${deviceDetailKey}|${proxyDetailKey}|${ruleDetailKey}|${ruleChainFlowKey}|${domainsPageKey}|${ipsPageKey}`;
+        const cacheKey = `${resolvedBackendId}|${clientInfo.range.start || ''}|${clientInfo.range.end || ''}|${includeSummaryKey}|${summaryFieldsKey}|${trendKey}|${deviceDetailKey}|${proxyDetailKey}|${ruleDetailKey}|${ruleChainFlowKey}|${domainsPageKey}|${ipsPageKey}`;
         if (!jsonCache.has(cacheKey)) {
           jsonCache.set(
             cacheKey,
@@ -1064,8 +1252,18 @@ export class StatsWebSocketServer {
               clientInfo.domainsPage,
               clientInfo.ipsPage,
               clientInfo.includeSummary,
+              clientInfo.summaryFields,
             ).then((stats) => (
-              stats ? JSON.stringify({ type: 'stats', data: stats, timestamp: ts }) : null
+              stats
+                ? JSON.stringify({
+                  type: 'stats',
+                  summaryFields: clientInfo.includeSummary
+                    ? this.buildSummaryFieldList(clientInfo.summaryFields)
+                    : undefined,
+                  data: stats,
+                  timestamp: ts,
+                })
+                : null
             )).catch((err) => {
               console.error('[WebSocket] Error building broadcast payload:', err);
               return null;

@@ -1,8 +1,29 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import type { StatsSummary } from '@neko-master/shared';
 import type { TimeRange } from '@/lib/api';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
+
+export type SummaryField =
+  | 'totals'
+  | 'topDomains'
+  | 'topIPs'
+  | 'proxyStats'
+  | 'countryStats'
+  | 'deviceStats'
+  | 'ruleStats'
+  | 'hourlyStats';
+
+const SUMMARY_FIELD_SET = new Set<SummaryField>([
+  'totals',
+  'topDomains',
+  'topIPs',
+  'proxyStats',
+  'countryStats',
+  'deviceStats',
+  'ruleStats',
+  'hourlyStats',
+]);
 
 export interface LiveConnection {
   id: string;
@@ -23,6 +44,7 @@ export interface LiveConnection {
 interface WebSocketMessage {
   type: 'stats' | 'ping' | 'pong';
   backendId?: number;
+  summaryFields?: SummaryField[];
   data?: StatsSummary;
   liveConnections?: LiveConnection[];
   timestamp: string;
@@ -33,6 +55,7 @@ interface UseStatsWebSocketOptions {
   range?: TimeRange;
   minPushIntervalMs?: number;
   includeSummary?: boolean;
+  summaryFields?: SummaryField[];
   includeTrend?: boolean;
   trendMinutes?: number;
   trendBucketMinutes?: number;
@@ -145,12 +168,32 @@ function getWsUrlCandidates(): string[] {
   return uniqueCandidates;
 }
 
+function normalizeSummaryFields(fields?: SummaryField[]): SummaryField[] | undefined {
+  if (!fields || fields.length === 0) {
+    return undefined;
+  }
+
+  const normalized = Array.from(
+    new Set(
+      fields.filter((field): field is SummaryField => SUMMARY_FIELD_SET.has(field)),
+    ),
+  ).sort();
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function summaryFieldsKey(fields?: SummaryField[]): string {
+  const normalized = normalizeSummaryFields(fields);
+  return normalized?.join(',') || '';
+}
+
 export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
   const {
     backendId,
     range,
     minPushIntervalMs,
     includeSummary,
+    summaryFields,
     includeTrend,
     trendMinutes,
     trendBucketMinutes,
@@ -181,6 +224,11 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
     trackLastMessage = true,
     enabled = true,
   } = options;
+  const normalizedSummaryFields = useMemo(
+    () => normalizeSummaryFields(summaryFields),
+    [summaryFields],
+  );
+  const summaryFieldsDependencyKey = normalizedSummaryFields?.join(',') || '';
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [lastMessage, setLastMessage] = useState<StatsSummary | null>(null);
   const [liveConnections, setLiveConnections] = useState<LiveConnection[]>([]);
@@ -197,11 +245,15 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
   const onDisconnectRef = useRef(options.onDisconnect);
   const onErrorRef = useRef(options.onError);
   const trackLastMessageRef = useRef(trackLastMessage);
+  const summaryFieldsKeyRef = useRef(summaryFieldsDependencyKey);
+  const hasSummaryFieldsFilterRef = useRef(!!normalizedSummaryFields);
   onMessageRef.current = options.onMessage;
   onConnectRef.current = options.onConnect;
   onDisconnectRef.current = options.onDisconnect;
   onErrorRef.current = options.onError;
   trackLastMessageRef.current = trackLastMessage;
+  summaryFieldsKeyRef.current = summaryFieldsDependencyKey;
+  hasSummaryFieldsFilterRef.current = !!normalizedSummaryFields;
 
   const cleanup = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -271,6 +323,16 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
           const message = JSON.parse(event.data) as WebSocketMessage;
 
           if (message.type === 'stats' && message.data) {
+            if (hasSummaryFieldsFilterRef.current) {
+              const incomingSummaryFieldsKey = summaryFieldsKey(message.summaryFields);
+              if (
+                incomingSummaryFieldsKey &&
+                incomingSummaryFieldsKey !== summaryFieldsKeyRef.current
+              ) {
+                return;
+              }
+            }
+
             if (trackLastMessageRef.current) {
               setLastMessage(message.data);
             }
@@ -342,6 +404,7 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
       end: range?.end,
       minPushIntervalMs,
       includeSummary,
+      summaryFields: normalizedSummaryFields,
       includeTrend,
       trendMinutes,
       trendBucketMinutes,
@@ -377,6 +440,7 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
     range?.end,
     minPushIntervalMs,
     includeSummary,
+    summaryFieldsDependencyKey,
     includeTrend,
     trendMinutes,
     trendBucketMinutes,
