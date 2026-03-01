@@ -143,6 +143,8 @@ const ZERO_BASE_SUMMARY = {
   totalDownload: 0,
   uniqueDomains: 0,
   uniqueIPs: 0,
+  totalProxies: 0,
+  totalRules: 0,
 };
 
 export class StatsWebSocketServer {
@@ -157,7 +159,15 @@ export class StatsWebSocketServer {
   // Cache for expensive full-summary queries: avoids re-querying all 8 base tables
   // when multiple broadcasts fire within a short window.
   private baseSummaryCache = new Map<string, {
-    summary?: { totalConnections: number; totalUpload: number; totalDownload: number; uniqueDomains: number; uniqueIPs: number };
+    summary?: {
+      totalConnections: number;
+      totalUpload: number;
+      totalDownload: number;
+      uniqueDomains: number;
+      uniqueIPs: number;
+      totalProxies: number;
+      totalRules: number;
+    };
     topDomains?: DomainStats[];
     topIPs?: IPStats[];
     proxyStats?: ProxyStats[];
@@ -1000,7 +1010,15 @@ export class StatsWebSocketServer {
         ]);
 
         const nextCached: {
-          summary?: { totalConnections: number; totalUpload: number; totalDownload: number; uniqueDomains: number; uniqueIPs: number };
+          summary?: {
+            totalConnections: number;
+            totalUpload: number;
+            totalDownload: number;
+            uniqueDomains: number;
+            uniqueIPs: number;
+            totalProxies: number;
+            totalRules: number;
+          };
           topDomains?: DomainStats[];
           topIPs?: IPStats[];
           proxyStats?: ProxyStats[];
@@ -1018,6 +1036,8 @@ export class StatsWebSocketServer {
             totalDownload: summaryRes.totalDownload,
             uniqueDomains: summaryRes.totalDomains,
             uniqueIPs: summaryRes.totalIPs,
+            totalProxies: summaryRes.totalProxies,
+            totalRules: summaryRes.totalRules,
           };
           nextCached.topDomains = summaryRes.topDomains;
           nextCached.topIPs = summaryRes.topIPs;
@@ -1100,8 +1120,8 @@ export class StatsWebSocketServer {
       totalConnections: summary.totalConnections,
       totalDomains: summary.uniqueDomains,
       totalIPs: summary.uniqueIPs,
-      totalProxies: proxyStats.length,
-      totalRules: ruleStats?.length,
+      totalProxies: summary.totalProxies,
+      totalRules: summary.totalRules,
       topDomains,
       topIPs,
       proxyStats,

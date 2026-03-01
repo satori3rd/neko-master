@@ -246,7 +246,7 @@ export function useDashboard(): UseDashboardReturn {
   const wsRealtimeActive = wsEnabled && wsConnected;
   const shouldReducePolling = wsRealtimeActive;
   const shouldUseHttpFallback =
-    !wsEnabled || wsStatus === "disconnected" || wsStatus === "error";
+    !wsEnabled || wsStatus === "disconnected" || wsStatus === "error" || wsStatus === "connecting";
   const fallbackRefetchInterval =
     autoRefresh && isWsSummaryTab && shouldUseHttpFallback ? 5000 : false;
   const hasWsCountries =
@@ -300,6 +300,10 @@ export function useDashboard(): UseDashboardReturn {
   const effectiveCountriesError = hasWsCountries ? null : countriesError;
 
   const queryError = effectiveSummaryError ?? effectiveCountriesError;
+  const isSummaryTransitioning =
+    needsSummaryData &&
+    shouldUseHttpFallback &&
+    (summaryQuery.isLoading || summaryQuery.isFetching);
 
   // Backend Status
   const backendStatus: BackendStatus = useMemo(() => {
@@ -459,7 +463,7 @@ export function useDashboard(): UseDashboardReturn {
     wsConnected,
     wsRealtimeActive,
     isLoading: summaryQuery.isLoading || (backendsQuery.isLoading && !backends.length),
-    isTransitioning: (summaryQuery.isLoading || summaryQuery.isPlaceholderData || isManualRefreshing) && !queryError,
+    isTransitioning: (isSummaryTransitioning || isManualRefreshing) && !queryError,
 
     // Actions
     setActiveTab,
